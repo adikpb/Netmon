@@ -1,45 +1,76 @@
+import asyncio
 import dash
-from dash import dcc, html, dash_table, Input, Output
-import sqlite3
+import mitmproxy.http
 import pandas as pd
 import plotly.express as px
+import sqlite3
 import threading
-import mitmproxy.http
-import time
-from mitmproxy.tools.main import mitmdump
+from dash import dcc, html, dash_table, Input, Output
+from mitmproxy.addons import default_addons, script
+from mitmproxy.master import Master
+from mitmproxy.options import Options
+from typing import Any, Callable, Self
+
 # Initialize Dash app
 app = dash.Dash(__name__)
 
 # SQLite Database Setup
-def init_db():
-    conn = sqlite3.connect("network_traffic.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS traffic (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            url TEXT, method TEXT, status_code INTEGER,
-            content_length INTEGER, timestamp TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+conn = sqlite3.connect("network_traffic.db")
+cursor = conn.cursor()
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS traffic (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        url TEXT, method TEXT, status_code INTEGER,
+        content_length INTEGER, timestamp TEXT
+    )
+""")
+conn.commit()
+conn.close()
 
-init_db()
 
 # mitmproxy Addon for Capturing Traffic
 class TrafficLogger:
     def request(self, flow: mitmproxy.http.HTTPFlow):
         conn = sqlite3.connect("network_traffic.db")
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO traffic (url, method, status_code, content_length, timestamp)
-            VALUES (?, ?, ?, ?, datetime('now'))
-        """, (flow.request.url, flow.request.method, flow.response.status_code if flow.response else None,
-              len(flow.response.content) if flow.response else 0))
+
+        content_length = 0
+        status_code = None
+        if flow.response:
+            status_code = flow.response.status_code
+            if flow.response.content:
+                content_length = len(flow.response.content)
+
+        cursor.execute("INSERT INTO traffic (url, method, status_code, content_length, timestamp) VALUES (?, ?, ?, ?, datetime('now'))", 
+                       (flow.request.url, flow.request.method, status_code, content_length))
         conn.commit()
         conn.close()
 
-addons = [TrafficLogger()]
+class ThreadedMitmProxy(threading.Thread):
+    def __init__(self, user_addon: Callable, **options: Any) -> None:
+        self.loop = asyncio.new_event_loop()
+        self.master = Master(Options(), event_loop=self.loop)
+        # replace the ScriptLoader with the user addon
+        self.master.addons.add(
+            *(
+                user_addon() if isinstance(addon, script.ScriptLoader) else addon
+                for addon in default_addons()
+            )
+        )
+        # set the options after the addons since some options depend on addons
+        self.master.options.update(**options)
+        super().__init__()
+
+    def run(self) -> None:
+        self.loop.run_until_complete(self.master.run())
+
+    def __enter__(self) -> Self:
+        self.start()
+        return self
+
+    def __exit__(self, *_) -> None:
+        self.master.shutdown()
+        self.join()
 
 # Fetch data from database
 def fetch_data():
@@ -99,7 +130,8 @@ def export_data(n_clicks):
     return dcc.send_data_frame(df.to_csv, "network_logs.csv")
 
 if __name__ == '__main__':
-    threading.Thread(target=lambda: app.run_server(debug=True, use_reloader=False)).start()
-    
-    mitmdump()
+    with ThreadedMitmProxy(TrafficLogger, listen_host="127.0.0.1", listen_port=8080):
+        threading.Thread(target=lambda: app.run_server(debug=True, use_reloader=False)).start()
+        input("hit <Enter> to quit")
+        print("shutdown mitmproxy")
 
