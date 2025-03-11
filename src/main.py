@@ -1,76 +1,74 @@
-import asyncio
-import dash
-import mitmproxy.http
-import pandas as pd
-import plotly.express as px
 import sqlite3
 import threading
-from dash import dcc, html, dash_table, Input, Output
-from mitmproxy.addons import default_addons, script
-from mitmproxy.master import Master
-from mitmproxy.options import Options
-from typing import Any, Callable, Self
+
+import dash
+import pandas as pd
+import plotly.express as px
+from dash import Input, Output, dash_table, dcc, html
+from scapy.all import sniff
+from scapy.contrib.igmp import IGMP
+from scapy.layers.inet import ICMP, IP, TCP, UDP
 
 # Initialize Dash app
 app = dash.Dash(__name__)
 
-# SQLite Database Setup
-conn = sqlite3.connect("network_traffic.db")
-cursor = conn.cursor()
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS traffic (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        url TEXT, method TEXT, status_code INTEGER,
-        content_length INTEGER, timestamp TEXT
-    )
-""")
-conn.commit()
-conn.close()
-
-
-# mitmproxy Addon for Capturing Traffic
+# Scapy Packet Sniffer
 class TrafficLogger:
-    def request(self, flow: mitmproxy.http.HTTPFlow):
-        conn = sqlite3.connect("network_traffic.db")
-        cursor = conn.cursor()
+    def __init__(self):
+        self.conn = None
+        self.cursor = None
 
-        content_length = 0
-        status_code = None
-        if flow.response:
-            status_code = flow.response.status_code
-            if flow.response.content:
-                content_length = len(flow.response.content)
+    def packet_sniffer(self, packet):
+        if packet.haslayer(IP):
+            protocol = "IP"
+            src_ip = packet[IP].src
+            dst_ip = packet[IP].dst
+            if packet.haslayer(TCP):
+                protocol = "TCP"
+                src_port = packet[TCP].sport
+                dst_port = packet[TCP].dport
+            elif packet.haslayer(UDP):
+                protocol = "UDP"
+                src_port = packet[UDP].sport
+                dst_port = packet[UDP].dport
+            elif packet.haslayer(ICMP):
+                protocol = "ICMP"
+                src_port = None
+                dst_port = None
+            elif packet.haslayer(IGMP):
+                protocol = "IGMP"
+                src_port = None
+                dst_port = None
+            else:
+                src_port = None
+                dst_port = None
+        else:
+            protocol = "Unknown"
+            src_ip = None
+            dst_ip = None
+            src_port = None
+            dst_port = None
 
-        cursor.execute("INSERT INTO traffic (url, method, status_code, content_length, timestamp) VALUES (?, ?, ?, ?, datetime('now'))", 
-                       (flow.request.url, flow.request.method, status_code, content_length))
-        conn.commit()
-        conn.close()
+        packet_length = len(packet)
 
-class ThreadedMitmProxy(threading.Thread):
-    def __init__(self, user_addon: Callable, **options: Any) -> None:
-        self.loop = asyncio.new_event_loop()
-        self.master = Master(Options(), event_loop=self.loop)
-        # replace the ScriptLoader with the user addon
-        self.master.addons.add(
-            *(
-                user_addon() if isinstance(addon, script.ScriptLoader) else addon
-                for addon in default_addons()
+        self.cursor.execute("INSERT INTO traffic (protocol, src_ip, dst_ip, src_port, dst_port, packet_length, timestamp) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+                           (protocol, src_ip, dst_ip, src_port, dst_port, packet_length))
+        self.conn.commit()
+
+    def start_sniffer(self):
+        # Create SQLite connection and cursor in the same thread
+        self.conn = sqlite3.connect("network_traffic.db")
+        self.cursor = self.conn.cursor()
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS traffic (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                protocol TEXT, src_ip TEXT, dst_ip TEXT, src_port INTEGER, dst_port INTEGER,
+                packet_length INTEGER, timestamp TEXT
             )
-        )
-        # set the options after the addons since some options depend on addons
-        self.master.options.update(**options)
-        super().__init__()
+        """)
+        self.conn.commit()
 
-    def run(self) -> None:
-        self.loop.run_until_complete(self.master.run())
-
-    def __enter__(self) -> Self:
-        self.start()
-        return self
-
-    def __exit__(self, *_) -> None:
-        self.master.shutdown()
-        self.join()
+        sniff(prn=self.packet_sniffer, store=False)
 
 # Fetch data from database
 def fetch_data():
@@ -88,10 +86,12 @@ app.layout = html.Div([
         id='traffic-table',
         columns=[
             {"name": "Timestamp", "id": "timestamp"},
-            {"name": "URL", "id": "url"},
-            {"name": "Method", "id": "method"},
-            {"name": "Status Code", "id": "status_code"},
-            {"name": "Content Length", "id": "content_length"},
+            {"name": "Protocol", "id": "protocol"},
+            {"name": "Source IP", "id": "src_ip"},
+            {"name": "Destination IP", "id": "dst_ip"},
+            {"name": "Source Port", "id": "src_port"},
+            {"name": "Destination Port", "id": "dst_port"},
+            {"name": "Packet Length", "id": "packet_length"},
         ],
         style_table={'overflowX': 'auto'},
     ),
@@ -114,8 +114,8 @@ def update_dashboard(n):
     df = fetch_data()
     table_data = df.to_dict('records')
     
-    pie_chart = px.pie(df, names='method', title='HTTP Method Distribution')
-    bar_chart = px.bar(df, x='status_code', title='Status Code Distribution')
+    pie_chart = px.pie(df, names='protocol', title='Protocol Distribution')
+    bar_chart = px.bar(df, x='protocol', y='packet_length', title='Packet Length by Protocol')
     
     return table_data, pie_chart, bar_chart
 
@@ -125,13 +125,12 @@ def update_dashboard(n):
     Input("export-button", "n_clicks"),
     prevent_initial_call=True,
 )
-def export_data(n_clicks):
+def export_data(n3_clicks):
     df = fetch_data()
     return dcc.send_data_frame(df.to_csv, "network_logs.csv")
 
 if __name__ == '__main__':
-    with ThreadedMitmProxy(TrafficLogger, listen_host="127.0.0.1", listen_port=8080):
-        threading.Thread(target=lambda: app.run_server(debug=True, use_reloader=False)).start()
-        input("hit <Enter> to quit")
-        print("shutdown mitmproxy")
+    traffic_logger = TrafficLogger()
+    threading.Thread(target=traffic_logger.start_sniffer).start()
+    app.run_server(debug=True, use_reloader=False)
 
