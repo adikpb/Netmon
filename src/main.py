@@ -51,9 +51,11 @@ class TrafficLogger:
 
         packet_length = len(packet)
 
-        self.cursor.execute("INSERT INTO traffic (protocol, src_ip, dst_ip, src_port, dst_port, packet_length, timestamp) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
-                           (protocol, src_ip, dst_ip, src_port, dst_port, packet_length))
-        self.conn.commit()
+        if self.cursor:
+            self.cursor.execute("INSERT INTO traffic (protocol, src_ip, dst_ip, src_port, dst_port, packet_length, timestamp) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+                               (protocol, src_ip, dst_ip, src_port, dst_port, packet_length))
+        if self.conn:
+            self.conn.commit()
 
     def start_sniffer(self):
         # Create SQLite connection and cursor in the same thread
