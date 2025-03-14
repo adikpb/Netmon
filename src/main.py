@@ -1,4 +1,3 @@
-
 import sqlite3
 import threading
 import time
@@ -7,10 +6,10 @@ import dash
 import pandas as pd
 import plotly.express as px
 from dash import Input, Output, dash_table, dcc, html
-
 from scapy.all import sniff
-from scapy.contrib.igmp import IGMP
-from scapy.layers.inet import ICMP, IP, TCP, UDP
+from scapy.layers.inet import IP, TCP, UDP
+from scapy.layers.inet6 import IPv6
+from scapy.packet import Packet, Padding, Raw
 
 # Initialize Dash app
 app = dash.Dash(__name__)
@@ -22,37 +21,33 @@ class TrafficLogger:
         self.cursor = None
         self.start_time = time.time()  # Capture start time
         self.capture_count = 0
+        self.possible_layers = set()
 
-    def packet_sniffer(self, packet):
+    def packet_sniffer(self, packet: Packet):
+        self.capture_count += 1
+        protocol = "Unknown"
+        for i in packet.layers()[::-1]:
+            if i not in (Raw, Padding):
+                protocol = i.__name__
+                break
+
+        src_ip = None
+        dst_ip = None
         if packet.haslayer(IP):
-            protocol = "IP"
             src_ip = packet[IP].src
             dst_ip = packet[IP].dst
-            if packet.haslayer(TCP):
-                protocol = "TCP"
-                src_port = packet[TCP].sport
-                dst_port = packet[TCP].dport
-            elif packet.haslayer(UDP):
-                protocol = "UDP"
-                src_port = packet[UDP].sport
-                dst_port = packet[UDP].dport
-            elif packet.haslayer(ICMP):
-                protocol = "ICMP"
-                src_port = None
-                dst_port = None
-            elif packet.haslayer(IGMP):
-                protocol = "IGMP"
-                src_port = None
-                dst_port = None
-            else:
-                src_port = None
-                dst_port = None
-        else:
-            protocol = "Unknown"
-            src_ip = None
-            dst_ip = None
-            src_port = None
-            dst_port = None
+        elif packet.haslayer(IPv6):
+            src_ip = packet[IPv6].src
+            dst_ip = packet[IPv6].dst
+
+        src_port = None
+        dst_port = None
+        if packet.haslayer(TCP):
+            src_port = packet[TCP].sport
+            dst_port = packet[TCP].dport
+        if packet.haslayer(UDP):
+            src_port = packet[UDP].sport
+            dst_port = packet[UDP].dport
 
         packet_length = len(packet)
 
@@ -93,7 +88,6 @@ def fetch_data():
     return df
 
 # Layout for Dash App
-# Layout for Dash App
 app.layout = html.Div(
     style={
         "background": "linear-gradient(to right, #e0f2f7, #b2ebf2)",
@@ -111,7 +105,7 @@ app.layout = html.Div(
             ],
             style={"textAlign": "center"},
         ),
-        dcc.Interval(id="interval-component", interval=5000, n_intervals=0),
+        dcc.Interval(id="interval-component", interval=500, n_intervals=0),
         dcc.Dropdown(
             id="protocol-dropdown-filter",  # ID for the dropdown
             options=[
@@ -251,4 +245,4 @@ def update_dashboard(n, protocol_filter):
 if __name__ == '__main__':
     traffic_logger = TrafficLogger()
     threading.Thread(target=traffic_logger.start_sniffer).start()
-    app.run_server(debug=True, use_reloader=False)
+    app.run(debug=True, use_reloader=False)
