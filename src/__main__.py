@@ -1,92 +1,14 @@
 import sqlite3
-import threading
-import time
+from capture import TrafficLogger
+from utils import lighten_hex_color, string_to_hex_color
 
 import dash
 import pandas as pd
 import plotly.express as px
 from dash import Input, Output, dash_table, dcc, html
-from scapy.all import sniff
-from scapy.layers.inet import IP, TCP, UDP
-from scapy.layers.inet6 import IPv6
-from scapy.packet import Packet, Padding, Raw
 
 # Initialize Dash app
 app = dash.Dash(__name__)
-
-
-# Scapy Packet Sniffer
-class TrafficLogger:
-    def __init__(self):
-        self.conn = None
-        self.cursor = None
-        self.start_time = time.time()  # Capture start time
-        self.capture_count = 0
-
-    def packet_sniffer(self, packet: Packet):
-        try:
-            self.capture_count += 1
-            protocol = "Unknown"
-            for i in packet.layers()[::-1]:
-                if i not in (Raw, Padding):
-                    protocol = i.__name__
-                    break
-
-            src_ip = None
-            dst_ip = None
-            if packet.haslayer(IP):
-                src_ip = packet[IP].src
-                dst_ip = packet[IP].dst
-            elif packet.haslayer(IPv6):
-                src_ip = packet[IPv6].src
-                dst_ip = packet[IPv6].dst
-
-            src_port = None
-            dst_port = None
-            if packet.haslayer(TCP):
-                src_port = packet[TCP].sport
-                dst_port = packet[TCP].dport
-            if packet.haslayer(UDP):
-                src_port = packet[UDP].sport
-                dst_port = packet[UDP].dport
-
-            packet_length = len(packet)
-
-            if self.cursor:
-                self.cursor.execute(
-                    "INSERT INTO traffic (protocol, src_ip, dst_ip, src_port, dst_port, packet_length, timestamp) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
-                    (protocol, src_ip, dst_ip, src_port, dst_port, packet_length),
-                )
-            if self.conn:
-                self.conn.commit()
-        except Exception as e:
-            print(f"Error: {e}")
-
-    def start_sniffer(self):
-        try:
-            # Create SQLite connection and cursor in the same thread
-            self.conn = sqlite3.connect("network_traffic.db")
-            self.cursor = self.conn.cursor()
-            self.cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS traffic (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    protocol TEXT, src_ip TEXT, dst_ip TEXT, src_port INTEGER, dst_port INTEGER,
-                    packet_length INTEGER, timestamp TEXT
-                )
-            """
-            )
-            self.conn.commit()
-
-            sniff(prn=self.packet_sniffer, store=False)
-        except Exception as e:
-            print(f"Error: {e}")
-
-    def get_capture_duration(self):
-        return time.time() - self.start_time
-
-    def get_capture_count(self):
-        return self.capture_count
 
 
 # Fetch data from database
@@ -155,7 +77,7 @@ app.layout = html.Div(
             ],
             style={"textAlign": "center"},
         ),
-        dcc.Interval(id="interval-component", interval=500, n_intervals=0),
+        dcc.Interval(id="interval-component", interval=5000, n_intervals=0),
         dcc.Dropdown(
             id="protocol-dropdown-filter",  # ID for the dropdown
             options=[
@@ -205,10 +127,8 @@ app.layout = html.Div(
             + [
                 {
                     "if": {"filter_query": "{protocol} = " + f"'{protocol}'"},
-                    "backgroundColor": "#{}{}{}".format(
-                        hex(int(protocol.encode("utf-8").hex(), 16) % 256)[2:],
-                        hex(int(protocol.encode("utf-8").hex(), 16) // 256 % 256)[2:],
-                        hex(int(protocol.encode("utf-8").hex(), 16) // 65536 % 256)[2:],
+                    "backgroundColor": lighten_hex_color(
+                        string_to_hex_color(protocol), 0.3
                     ),
                 }
                 for protocol in get_protocol_types()
@@ -248,6 +168,53 @@ app.layout = html.Div(
         ),
     ],
 )
+
+
+@app.callback(
+    [
+        Output("traffic-table", "style_data_conditional"),
+        Output("protocol-dropdown-filter", "options"),
+    ],
+    [
+        Input("traffic-table", "data"),
+        Input("protocol-dropdown-filter", "options"),
+        Input("traffic-table", "style_data_conditional"),
+    ],
+)
+def update_protocols(data, protocols, style):
+    try:
+        conn = sqlite3.connect("network_traffic.db")
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS traffic (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                protocol TEXT, src_ip TEXT, dst_ip TEXT, src_port INTEGER, dst_port INTEGER,
+                packet_length INTEGER, timestamp TEXT
+            )
+        """
+        )
+        cursor.execute("SELECT DISTINCT protocol FROM traffic")
+        protocol_types = set([row[0] for row in cursor.fetchall()])
+        conn.close()
+        currently_distinct_protocols = set(i["label"] for i in protocols)
+
+        return style + [
+            {
+                "if": {"filter_query": "{protocol} = " + f"'{protocol}'"},
+                "backgroundColor": lighten_hex_color(
+                    string_to_hex_color(protocol), 0.3
+                ),
+            }
+            for protocol in protocol_types - currently_distinct_protocols
+        ], protocols + [
+            {"label": protocol, "value": protocol}
+            for protocol in protocol_types - currently_distinct_protocols
+        ]
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return []
 
 
 @app.callback(
@@ -302,12 +269,15 @@ def update_dashboard(n, protocol_filter):
 def export_csv(n_clicks):
     try:
         df = fetch_data()
-        return dcc.send_data_frame(df.to_csv if df is not None else None, "traffic_data.csv")
+        return dcc.send_data_frame(
+            df.to_csv if df is not None else None, "traffic_data.csv"
+        )
     except Exception as e:
         print(f"Error: {e}")
 
 
 if __name__ == "__main__":
     traffic_logger = TrafficLogger()
-    threading.Thread(target=traffic_logger.start_sniffer).start()
-    app.run(debug=True, use_reloader=False)
+    traffic_logger.start_sniffer()
+    app.run(debug=True, use_reloader=True)
+    input()
