@@ -14,6 +14,7 @@ from scapy.packet import Packet, Padding, Raw
 # Initialize Dash app
 app = dash.Dash(__name__)
 
+
 # Scapy Packet Sniffer
 class TrafficLogger:
     def __init__(self):
@@ -52,8 +53,10 @@ class TrafficLogger:
         packet_length = len(packet)
 
         if self.cursor:
-            self.cursor.execute("INSERT INTO traffic (protocol, src_ip, dst_ip, src_port, dst_port, packet_length, timestamp) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
-                               (protocol, src_ip, dst_ip, src_port, dst_port, packet_length))
+            self.cursor.execute(
+                "INSERT INTO traffic (protocol, src_ip, dst_ip, src_port, dst_port, packet_length, timestamp) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+                (protocol, src_ip, dst_ip, src_port, dst_port, packet_length),
+            )
         if self.conn:
             self.conn.commit()
 
@@ -80,12 +83,33 @@ class TrafficLogger:
     def get_capture_count(self):
         return self.capture_count
 
+
 # Fetch data from database
 def fetch_data():
     conn = sqlite3.connect("network_traffic.db")
     df = pd.read_sql("SELECT * FROM traffic ORDER BY timestamp DESC LIMIT 100", conn)
     conn.close()
     return df
+
+
+# Get unique protocol types from database
+def get_protocol_types():
+    conn = sqlite3.connect("network_traffic.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS traffic (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            protocol TEXT, src_ip TEXT, dst_ip TEXT, src_port INTEGER, dst_port INTEGER,
+            packet_length INTEGER, timestamp TEXT
+        )
+    """
+    )
+    cursor.execute("SELECT DISTINCT protocol FROM traffic")
+    protocol_types = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return protocol_types
+
 
 # Layout for Dash App
 app.layout = html.Div(
@@ -100,8 +124,14 @@ app.layout = html.Div(
         ),
         html.Div(
             [
-                html.Div(id="capture-duration", style={"display": "inline-block", "margin": "10px"}),
-                html.Div(id="capture-count", style={"display": "inline-block", "margin": "10px"}),
+                html.Div(
+                    id="capture-duration",
+                    style={"display": "inline-block", "margin": "10px"},
+                ),
+                html.Div(
+                    id="capture-count",
+                    style={"display": "inline-block", "margin": "10px"},
+                ),
             ],
             style={"textAlign": "center"},
         ),
@@ -110,11 +140,11 @@ app.layout = html.Div(
             id="protocol-dropdown-filter",  # ID for the dropdown
             options=[
                 {"label": "All", "value": "All"},
-                {"label": "TCP", "value": "TCP"},
-                {"label": "UDP", "value": "UDP"},
-                {"label": "ICMP", "value": "ICMP"},
-                {"label": "IGMP", "value": "IGMP"},
                 {"label": "Unknown", "value": "Unknown"},
+            ]
+            + [
+                {"label": protocol, "value": protocol}
+                for protocol in get_protocol_types()
             ],
             value="All",
             style={"width": "200px", "margin": "10px"},
@@ -123,7 +153,7 @@ app.layout = html.Div(
             id="traffic-table",
             columns=[
                 {"name": "Timestamp", "id": "timestamp"},
-                {"name": "Protocol", "id": "protocol"}, #remove filter_options
+                {"name": "Protocol", "id": "protocol"},  # remove filter_options
                 {"name": "Source IP", "id": "src_ip"},
                 {"name": "Destination IP", "id": "dst_ip"},
                 {"name": "Source Port", "id": "src_port"},
@@ -150,33 +180,30 @@ app.layout = html.Div(
                 {
                     "if": {"row_index": "odd"},
                     "backgroundColor": "#f2f2f2",
-                },
+                }
+            ]
+            + [
                 {
-                    "if": {"filter_query": "{protocol} = 'TCP'"},
-                    "backgroundColor": "#e0f7fa",
-                },
-                {
-                    "if": {"filter_query": "{protocol} = 'UDP'"},
-                    "backgroundColor": "#e8f5e9",
-                },
-                {
-                    "if": {"filter_query": "{protocol} = 'ICMP'"},
-                    "backgroundColor": "#fff3e0",
-                },
-                {
-                    "if": {"filter_query": "{protocol} = 'IGMP'"},
-                    "backgroundColor": "#f3e5f5",
-                },
-                {
-                    "if": {"filter_query": "{protocol} = 'Unknown'"},
-                    "backgroundColor": "#f5f5f5",
-                },
+                    "if": {"filter_query": "{protocol} = " + f"'{protocol}'"},
+                    "backgroundColor": "#{}{}{}".format(
+                        hex(int(protocol.encode("utf-8").hex(), 16) % 256)[2:],
+                        hex(int(protocol.encode("utf-8").hex(), 16) // 256 % 256)[2:],
+                        hex(int(protocol.encode("utf-8").hex(), 16) // 65536 % 256)[2:],
+                    ),
+                }
+                for protocol in get_protocol_types()
             ],
         ),
         html.Div(
             [
-                dcc.Graph(id="traffic-pie-chart", style={"width": "48%", "display": "inline-block"}),
-                dcc.Graph(id="traffic-bar-chart", style={"width": "48%", "display": "inline-block"}),
+                dcc.Graph(
+                    id="traffic-pie-chart",
+                    style={"width": "48%", "display": "inline-block"},
+                ),
+                dcc.Graph(
+                    id="traffic-bar-chart",
+                    style={"width": "48%", "display": "inline-block"},
+                ),
             ]
         ),
         html.Div(
@@ -202,6 +229,7 @@ app.layout = html.Div(
     ],
 )
 
+
 @app.callback(
     [
         Output("traffic-table", "data"),
@@ -210,7 +238,10 @@ app.layout = html.Div(
         Output("capture-duration", "children"),
         Output("capture-count", "children"),
     ],
-    [Input("interval-component", "n_intervals"), Input("protocol-dropdown-filter", "value")],
+    [
+        Input("interval-component", "n_intervals"),
+        Input("protocol-dropdown-filter", "value"),
+    ],
 )
 def update_dashboard(n, protocol_filter):
     df = fetch_data()  # Corrected line: Fetch data from the database
@@ -224,12 +255,8 @@ def update_dashboard(n, protocol_filter):
         df, x="protocol", y="packet_length", title="Packet Length by Protocol"
     )
 
-    pie_chart.update_layout(
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)"
-    )
-    bar_chart.update_layout(
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)"
-    )
+    pie_chart.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
+    bar_chart.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
 
     capture_duration = traffic_logger.get_capture_duration()
     capture_count = traffic_logger.get_capture_count()
@@ -242,7 +269,8 @@ def update_dashboard(n, protocol_filter):
         f"Total Captures: {capture_count}",
     )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     traffic_logger = TrafficLogger()
     threading.Thread(target=traffic_logger.start_sniffer).start()
     app.run(debug=True, use_reloader=False)
