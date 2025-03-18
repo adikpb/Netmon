@@ -22,60 +22,65 @@ class TrafficLogger:
         self.cursor = None
         self.start_time = time.time()  # Capture start time
         self.capture_count = 0
-        self.possible_layers = set()
 
     def packet_sniffer(self, packet: Packet):
-        self.capture_count += 1
-        protocol = "Unknown"
-        for i in packet.layers()[::-1]:
-            if i not in (Raw, Padding):
-                protocol = i.__name__
-                break
+        try:
+            self.capture_count += 1
+            protocol = "Unknown"
+            for i in packet.layers()[::-1]:
+                if i not in (Raw, Padding):
+                    protocol = i.__name__
+                    break
 
-        src_ip = None
-        dst_ip = None
-        if packet.haslayer(IP):
-            src_ip = packet[IP].src
-            dst_ip = packet[IP].dst
-        elif packet.haslayer(IPv6):
-            src_ip = packet[IPv6].src
-            dst_ip = packet[IPv6].dst
+            src_ip = None
+            dst_ip = None
+            if packet.haslayer(IP):
+                src_ip = packet[IP].src
+                dst_ip = packet[IP].dst
+            elif packet.haslayer(IPv6):
+                src_ip = packet[IPv6].src
+                dst_ip = packet[IPv6].dst
 
-        src_port = None
-        dst_port = None
-        if packet.haslayer(TCP):
-            src_port = packet[TCP].sport
-            dst_port = packet[TCP].dport
-        if packet.haslayer(UDP):
-            src_port = packet[UDP].sport
-            dst_port = packet[UDP].dport
+            src_port = None
+            dst_port = None
+            if packet.haslayer(TCP):
+                src_port = packet[TCP].sport
+                dst_port = packet[TCP].dport
+            if packet.haslayer(UDP):
+                src_port = packet[UDP].sport
+                dst_port = packet[UDP].dport
 
-        packet_length = len(packet)
+            packet_length = len(packet)
 
-        if self.cursor:
-            self.cursor.execute(
-                "INSERT INTO traffic (protocol, src_ip, dst_ip, src_port, dst_port, packet_length, timestamp) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
-                (protocol, src_ip, dst_ip, src_port, dst_port, packet_length),
-            )
-        if self.conn:
-            self.conn.commit()
+            if self.cursor:
+                self.cursor.execute(
+                    "INSERT INTO traffic (protocol, src_ip, dst_ip, src_port, dst_port, packet_length, timestamp) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+                    (protocol, src_ip, dst_ip, src_port, dst_port, packet_length),
+                )
+            if self.conn:
+                self.conn.commit()
+        except Exception as e:
+            print(f"Error: {e}")
 
     def start_sniffer(self):
-        # Create SQLite connection and cursor in the same thread
-        self.conn = sqlite3.connect("network_traffic.db")
-        self.cursor = self.conn.cursor()
-        self.cursor.execute(
+        try:
+            # Create SQLite connection and cursor in the same thread
+            self.conn = sqlite3.connect("network_traffic.db")
+            self.cursor = self.conn.cursor()
+            self.cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS traffic (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    protocol TEXT, src_ip TEXT, dst_ip TEXT, src_port INTEGER, dst_port INTEGER,
+                    packet_length INTEGER, timestamp TEXT
+                )
             """
-            CREATE TABLE IF NOT EXISTS traffic (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                protocol TEXT, src_ip TEXT, dst_ip TEXT, src_port INTEGER, dst_port INTEGER,
-                packet_length INTEGER, timestamp TEXT
             )
-        """
-        )
-        self.conn.commit()
+            self.conn.commit()
 
-        sniff(prn=self.packet_sniffer, store=False)
+            sniff(prn=self.packet_sniffer, store=False)
+        except Exception as e:
+            print(f"Error: {e}")
 
     def get_capture_duration(self):
         return time.time() - self.start_time
@@ -85,30 +90,45 @@ class TrafficLogger:
 
 
 # Fetch data from database
-def fetch_data():
-    conn = sqlite3.connect("network_traffic.db")
-    df = pd.read_sql("SELECT * FROM traffic ORDER BY timestamp DESC LIMIT 100", conn)
-    conn.close()
-    return df
+def fetch_data(protocol_filter=None):
+    try:
+        conn = sqlite3.connect("network_traffic.db")
+        if protocol_filter != "All":
+            df = pd.read_sql(
+                f"SELECT * FROM traffic WHERE protocol = '{protocol_filter}' ORDER BY timestamp DESC LIMIT 100",
+                conn,
+            )
+        else:
+            df = pd.read_sql(
+                "SELECT * FROM traffic ORDER BY timestamp DESC LIMIT 100", conn
+            )
+        conn.close()
+        return df
+    except Exception as e:
+        print(f"Error: {e}")
 
 
 # Get unique protocol types from database
 def get_protocol_types():
-    conn = sqlite3.connect("network_traffic.db")
-    cursor = conn.cursor()
-    cursor.execute(
+    try:
+        conn = sqlite3.connect("network_traffic.db")
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS traffic (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                protocol TEXT, src_ip TEXT, dst_ip TEXT, src_port INTEGER, dst_port INTEGER,
+                packet_length INTEGER, timestamp TEXT
+            )
         """
-        CREATE TABLE IF NOT EXISTS traffic (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            protocol TEXT, src_ip TEXT, dst_ip TEXT, src_port INTEGER, dst_port INTEGER,
-            packet_length INTEGER, timestamp TEXT
         )
-    """
-    )
-    cursor.execute("SELECT DISTINCT protocol FROM traffic")
-    protocol_types = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return protocol_types
+        cursor.execute("SELECT DISTINCT protocol FROM traffic")
+        protocol_types = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return protocol_types
+    except Exception as e:
+        print(f"Error: {e}")
+        return []
 
 
 # Layout for Dash App
@@ -244,30 +264,47 @@ app.layout = html.Div(
     ],
 )
 def update_dashboard(n, protocol_filter):
-    df = fetch_data()  # Corrected line: Fetch data from the database
-    if protocol_filter != "All":
-        df = df[df["protocol"] == protocol_filter]
+    try:
+        df = fetch_data(protocol_filter)
+        table_data = df.to_dict("records") if df is not None else None
 
-    table_data = df.to_dict("records")
+        pie_chart = px.pie(df, names="protocol", title="Protocol Distribution")
+        bar_chart = px.bar(
+            df, x="protocol", y="packet_length", title="Packet Length by Protocol"
+        )
 
-    pie_chart = px.pie(df, names="protocol", title="Protocol Distribution")
-    bar_chart = px.bar(
-        df, x="protocol", y="packet_length", title="Packet Length by Protocol"
-    )
+        pie_chart.update_layout(
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)"
+        )
+        bar_chart.update_layout(
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)"
+        )
 
-    pie_chart.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-    bar_chart.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
+        capture_duration = traffic_logger.get_capture_duration()
+        capture_count = traffic_logger.get_capture_count()
 
-    capture_duration = traffic_logger.get_capture_duration()
-    capture_count = traffic_logger.get_capture_count()
+        return (
+            table_data,
+            pie_chart,
+            bar_chart,
+            f"Capture Duration: {capture_duration:.2f} seconds",
+            f"Total Captures: {capture_count}",
+        )
+    except Exception as e:
+        print(f"Error: {e}")
 
-    return (
-        table_data,
-        pie_chart,
-        bar_chart,
-        f"Capture Duration: {capture_duration:.2f} seconds",
-        f"Total Captures: {capture_count}",
-    )
+
+@app.callback(
+    Output("download-dataframe-csv", "data"),
+    Input("export-button", "n_clicks"),
+    prevent_initial_call=True,
+)
+def export_csv(n_clicks):
+    try:
+        df = fetch_data()
+        return dcc.send_data_frame(df.to_csv if df is not None else None, "traffic_data.csv")
+    except Exception as e:
+        print(f"Error: {e}")
 
 
 if __name__ == "__main__":
