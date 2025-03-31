@@ -1,129 +1,156 @@
+import atexit
 import logging
-import queue
-import sqlite3
 import threading
 import time
+from datetime import datetime
+from typing import Any, Dict, Optional
 
-from scapy.layers.inet import IP, TCP, UDP
-from scapy.layers.inet6 import IPv6
-from scapy.packet import Packet, Padding, Raw
-from scapy.sendrecv import AsyncSniffer
+from scapy.all import ICMP, IP, TCP, UDP, Padding, Raw, sniff
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+from database import DatabaseManager
 
 
 class TrafficLogger:
     def __init__(self):
-        self.db_queue = queue.Queue()  # Queue for async DB writes
-        self.conn = None
-        self.cursor = None
-        self.start_time = time.time()
-        self.capture_count = 0
-        self.running = True
+        self.start_time: Optional[float] = None
+        self.packet_count = 0
+        self.db = DatabaseManager()
+        self.is_running = False
+        self.sniffer_thread: Optional[threading.Thread] = None
+        self._setup_logging()
+        # Register cleanup on program exit
+        atexit.register(self.stop_sniffer)
 
-        # Start database worker thread
-        self.db_thread = threading.Thread(target=self.process_db_queue, daemon=True)
-        self.db_thread.start()
+    def _setup_logging(self):
+        """Setup logging configuration."""
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            handlers=[
+                logging.FileHandler("network_monitor.log"),
+                logging.StreamHandler(),
+            ],
+        )
+        self.logger = logging.getLogger(__name__)
 
-        # Start packet sniffer
-        self.sniffer = AsyncSniffer(prn=self.analyze_packet)
-
-    def analyze_packet(self, packet: Packet):
+    def _extract_packet_info(self, packet) -> Dict[str, Any]:
+        """Extract relevant information from a packet."""
         try:
-            self.capture_count += 1
             protocol = "Unknown"
             for layer in packet.layers()[::-1]:
                 if layer not in (Raw, Padding):
                     protocol = layer.__name__
                     break
+            if IP in packet:
+                info = {
+                    "src_ip": packet[IP].src,
+                    "dst_ip": packet[IP].dst,
+                    "protocol": protocol,
+                    "packet_length": len(packet),
+                    "timestamp": datetime.now().isoformat(),
+                    "ttl": packet[IP].ttl,
+                    "flags": None,
+                    "window_size": None,
+                    "src_port": None,
+                    "dst_port": None,
+                }
 
-            src_ip, dst_ip = None, None
-            if packet.haslayer(IP):
-                src_ip = packet[IP].src
-                dst_ip = packet[IP].dst
-            elif packet.haslayer(IPv6):
-                src_ip = packet[IPv6].src
-                dst_ip = packet[IPv6].dst
-
-            src_port, dst_port = None, None
-            if packet.haslayer(TCP):
-                src_port = packet[TCP].sport
-                dst_port = packet[TCP].dport
-            elif packet.haslayer(UDP):
-                src_port = packet[UDP].sport
-                dst_port = packet[UDP].dport
-
-            packet_length = len(packet)
-            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-
-            # Queue packet data for database insertion
-            self.db_queue.put(
-                (protocol, src_ip, dst_ip, src_port, dst_port, packet_length, timestamp)
-            )
-
-        except Exception as e:
-            logging.error(f"Error processing packet: {e}")
-
-    def process_db_queue(self):
-        self.conn = sqlite3.connect("network_traffic.db", check_same_thread=False)
-        self.cursor = self.conn.cursor()
-        self.cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS traffic (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                protocol TEXT, 
-                src_ip TEXT, 
-                dst_ip TEXT, 
-                src_port INTEGER, 
-                dst_port INTEGER,
-                packet_length INTEGER, 
-                timestamp TEXT
-            )
-            """
-        )
-        self.conn.commit()
-
-        while self.running or not self.db_queue.empty():
-            try:
-                data = self.db_queue.get(timeout=1)
-                if data:
-                    self.cursor.execute(
-                        """
-                        INSERT INTO traffic (protocol, src_ip, dst_ip, src_port, dst_port, packet_length, timestamp) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        data,
+                if TCP in packet:
+                    info.update(
+                        {
+                            "src_port": packet[TCP].sport,
+                            "dst_port": packet[TCP].dport,
+                            "flags": str(packet[TCP].flags),
+                            "window_size": packet[TCP].window,
+                        }
                     )
-                    self.conn.commit()
-            except queue.Empty:
-                continue
-            except Exception as e:
-                logging.error(f"Database error: {e}")
+                elif UDP in packet:
+                    info.update(
+                        {"src_port": packet[UDP].sport, "dst_port": packet[UDP].dport}
+                    )
+                elif ICMP in packet:
+                    info.update({"type": packet[ICMP].type, "code": packet[ICMP].code})
+
+                return info
+            return None
+        except Exception as e:
+            self.logger.error(f"Error extracting packet info: {e}")
+            return None
+
+    def _packet_callback(self, packet):
+        """Callback function for packet processing."""
+        try:
+            if not self.is_running:
+                return
+
+            packet_info = self._extract_packet_info(packet)
+            if packet_info:
+                self.packet_count += 1
+                if self.db.insert_traffic(packet_info):
+                    self.logger.debug(f"Packet captured: {packet_info}")
+                else:
+                    self.logger.error("Failed to insert packet data into database")
+        except Exception as e:
+            self.logger.error(f"Error in packet callback: {e}")
+
+    def _sniff_thread(self):
+        """Thread function for packet capture."""
+        try:
+            self.start_time = time.time()
+            self.packet_count = 0
+            self.is_running = True
+            self.logger.info("Starting packet capture...")
+
+            sniff(
+                prn=self._packet_callback,
+                store=0,
+                stop_filter=lambda x: not self.is_running,
+            )
+        except Exception as e:
+            self.logger.error(f"Error in sniffer thread: {e}")
+            self.stop_sniffer()
 
     def start_sniffer(self):
-        try:
-            self.sniffer.start()
-            logging.info("Sniffer started.")
-        except Exception as e:
-            logging.error(f"Error starting sniffer: {e}")
+        """Start the packet sniffer in a separate thread."""
+        if not self.is_running and (
+            not self.sniffer_thread or not self.sniffer_thread.is_alive()
+        ):
+            self.sniffer_thread = threading.Thread(target=self._sniff_thread)
+            self.sniffer_thread.daemon = (
+                True  # Thread will exit when main program exits
+            )
+            self.sniffer_thread.start()
+            self.logger.info("Packet capture thread started")
 
     def stop_sniffer(self):
-        self.sniffer.stop()
-        logging.info("Sniffer stopped. Waiting for pending DB operations...")
-        self.running = False
-        self.db_thread.join()  # Ensure all pending database writes are completed
-        if self.conn:
-            self.conn.close()
-        logging.info("Database connection closed.")
+        """Stop the packet sniffer."""
+        if self.is_running:
+            self.is_running = False
+            if self.sniffer_thread and self.sniffer_thread.is_alive():
+                self.sniffer_thread.join(
+                    timeout=1.0
+                )  # Wait up to 1 second for thread to finish
+            self.logger.info("Stopping packet capture")
 
-    def get_capture_duration(self):
+    def get_capture_duration(self) -> float:
+        """Get the duration of the capture in seconds."""
+        if self.start_time is None:
+            return 0.0
         return time.time() - self.start_time
 
-    def get_capture_count(self):
-        return self.capture_count
+    def get_capture_count(self) -> int:
+        """Get the total number of packets captured."""
+        return self.packet_count
+
+    def get_capture_stats(self) -> Dict[str, Any]:
+        """Get capture statistics."""
+        return {
+            "duration": self.get_capture_duration(),
+            "packet_count": self.get_capture_count(),
+            "packets_per_second": self.packet_count / self.get_capture_duration()
+            if self.get_capture_duration() > 0
+            else 0,
+        }
 
 
 if __name__ == "__main__":
