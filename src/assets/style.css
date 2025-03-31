@@ -5,6 +5,37 @@ body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
+/* Dashboard Container */
+.dashboard-container {
+    background: linear-gradient(to right, #e0f2f7, #b2ebf2);
+    min-height: 100vh;
+    padding: 20px;
+}
+
+/* Header Styles */
+.dashboard-header {
+    text-align: center;
+    color: #333;
+    margin-bottom: 20px;
+}
+
+/* Controls Section */
+.controls-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    width: 100%;
+    margin-bottom: 20px;
+}
+
+.control-group {
+    display: inline-block;
+}
+
+.control-group.right-aligned {
+    float: right;
+}
+
 /* Statistics Cards */
 .stat-card {
     background: white;
@@ -17,77 +48,102 @@ body {
     transition: transform 0.2s;
 }
 
+.stat-cards-container {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 20px;
+}
+
 .stat-card:hover {
     transform: translateY(-5px);
 }
 
-/* Controls */
-.control-container {
-    background: white;
-    padding: 15px;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+/* Tables Section */
+.table-container {
+    width: 100%;
     margin-bottom: 20px;
 }
 
-/* Status Indicator */
-#status-indicator {
-    background: #e8f5e9;
-    color: #2e7d32;
-    padding: 10px;
-    border-radius: 5px;
-    margin: 10px 0;
+.table-title {
+    margin-bottom: 10px;
 }
 
-/* Table Styles */
-.dash-table-container {
-    background: white;
+.data-table {
+    overflow-x: auto;
     border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    margin: 20px 0;
-}
-
-.dash-table-tooltip {
-    background: white;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    padding: 5px;
-    font-size: 12px;
-}
-
-/* Chart Containers */
-.chart-container {
-    background: white;
-    padding: 15px;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    margin: 10px 0;
-}
-
-/* Export Button */
-#export-button {
-    background: #007bff;
-    color: white;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
     border: none;
+    background-color: white;
+}
+
+.table-header {
+    background-color: #f8f9fa;
+    font-weight: 600;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.table-cell {
+    text-align: left;
+    padding: 10px 15px;
+    border: none;
+}
+
+/* Button Styles */
+.action-button {
+    margin: 10px;
     padding: 10px 20px;
     border-radius: 5px;
+    border: none;
     cursor: pointer;
-    transition: background-color 0.2s;
+    color: white;
 }
 
-#export-button:hover {
-    background: #0056b3;
+.unflag-button {
+    background-color: #6c757d;
+}
+
+.export-button {
+    margin: 20px auto;
+    display: block;
+    border-radius: 5px;
+    padding: 12px 25px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* Charts Section */
+.charts-container {
+    display: flex;
+    justify-content: space-between;
+}
+
+.chart-wrapper {
+    width: 48%;
+    display: inline-block;
+}
+
+.chart-title {
+    margin-bottom: 10px;
+}
+
+/* Status Indicator */
+.status-indicator {
+    text-align: center;
+    margin-bottom: 20px;
+    padding: 10px;
+    border-radius: 5px;
+    background-color: #e8f5e9;
 }
 
 /* Dropdowns */
-.Select-control {
-    border-radius: 4px;
-    border: 1px solid #ddd;
+.dropdown-container {
+    width: 200px;
 }
 
-.Select-menu-outer {
-    border-radius: 4px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+.refresh-dropdown {
+    width: 150px;
 }
 
 /* Responsive Design */
@@ -99,5 +155,14 @@ body {
     .chart-container {
         width: 100%;
         margin: 10px 0;
+    }
+    
+    .charts-container {
+        flex-direction: column;
+    }
+    
+    .chart-wrapper {
+        width: 100%;
+        margin-bottom: 20px;
     }
 } 

@@ -9,6 +9,8 @@ from scapy.all import ICMP, IP, TCP, UDP, Padding, Raw, sniff
 
 from database import DatabaseManager
 
+logger = logging.getLogger(__name__)
+
 
 class TrafficLogger:
     def __init__(self):
@@ -17,21 +19,9 @@ class TrafficLogger:
         self.db = DatabaseManager()
         self.is_running = False
         self.sniffer_thread: Optional[threading.Thread] = None
-        self._setup_logging()
+        logger.info("Initializing TrafficLogger")
         # Register cleanup on program exit
         atexit.register(self.stop_sniffer)
-
-    def _setup_logging(self):
-        """Setup logging configuration."""
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            handlers=[
-                logging.FileHandler("network_monitor.log"),
-                logging.StreamHandler(),
-            ],
-        )
-        self.logger = logging.getLogger(__name__)
 
     def _extract_packet_info(self, packet) -> Dict[str, Any]:
         """Extract relevant information from a packet."""
@@ -41,10 +31,15 @@ class TrafficLogger:
                 if layer not in (Raw, Padding):
                     protocol = layer.__name__
                     break
+
             if IP in packet:
+                src_ip = packet[IP].src
+                dst_ip = packet[IP].dst
+                logger.debug(f"Processing packet: {protocol} {src_ip} -> {dst_ip}")
+
                 info = {
-                    "src_ip": packet[IP].src,
-                    "dst_ip": packet[IP].dst,
+                    "src_ip": src_ip,
+                    "dst_ip": dst_ip,
                     "protocol": protocol,
                     "packet_length": len(packet),
                     "timestamp": datetime.now().isoformat(),
@@ -64,17 +59,26 @@ class TrafficLogger:
                             "window_size": packet[TCP].window,
                         }
                     )
+                    logger.debug(
+                        f"TCP flags: {packet[TCP].flags}, window: {packet[TCP].window}"
+                    )
                 elif UDP in packet:
                     info.update(
                         {"src_port": packet[UDP].sport, "dst_port": packet[UDP].dport}
                     )
+                    logger.debug(
+                        f"UDP ports: {packet[UDP].sport} -> {packet[UDP].dport}"
+                    )
                 elif ICMP in packet:
                     info.update({"type": packet[ICMP].type, "code": packet[ICMP].code})
+                    logger.debug(
+                        f"ICMP type: {packet[ICMP].type}, code: {packet[ICMP].code}"
+                    )
 
                 return info
             return None
         except Exception as e:
-            self.logger.error(f"Error extracting packet info: {e}")
+            logger.error(f"Error extracting packet info: {e}", exc_info=True)
             return None
 
     def _packet_callback(self, packet):
@@ -87,11 +91,18 @@ class TrafficLogger:
             if packet_info:
                 self.packet_count += 1
                 if self.db.insert_traffic(packet_info):
-                    self.logger.debug(f"Packet captured: {packet_info}")
+                    if (
+                        self.packet_count % 100 == 0
+                    ):  # Log every 100th packet to avoid excessive logging
+                        logger.info(
+                            f"Processed {self.packet_count} packets. Latest: "
+                            f"{packet_info['protocol']} {packet_info['src_ip']}:{packet_info.get('src_port', 'N/A')} -> "
+                            f"{packet_info['dst_ip']}:{packet_info.get('dst_port', 'N/A')}"
+                        )
                 else:
-                    self.logger.error("Failed to insert packet data into database")
+                    logger.error("Failed to insert packet data into database")
         except Exception as e:
-            self.logger.error(f"Error in packet callback: {e}")
+            logger.error(f"Error in packet callback: {e}", exc_info=True)
 
     def _sniff_thread(self):
         """Thread function for packet capture."""
@@ -99,7 +110,7 @@ class TrafficLogger:
             self.start_time = time.time()
             self.packet_count = 0
             self.is_running = True
-            self.logger.info("Starting packet capture...")
+            logger.info("Starting packet capture thread")
 
             sniff(
                 prn=self._packet_callback,
@@ -107,7 +118,7 @@ class TrafficLogger:
                 stop_filter=lambda x: not self.is_running,
             )
         except Exception as e:
-            self.logger.error(f"Error in sniffer thread: {e}")
+            logger.error(f"Error in sniffer thread: {e}", exc_info=True)
             self.stop_sniffer()
 
     def start_sniffer(self):
@@ -115,22 +126,22 @@ class TrafficLogger:
         if not self.is_running and (
             not self.sniffer_thread or not self.sniffer_thread.is_alive()
         ):
+            logger.info("Starting packet sniffer")
             self.sniffer_thread = threading.Thread(target=self._sniff_thread)
-            self.sniffer_thread.daemon = (
-                True  # Thread will exit when main program exits
-            )
+            self.sniffer_thread.daemon = True
             self.sniffer_thread.start()
-            self.logger.info("Packet capture thread started")
+            logger.info("Packet capture thread started successfully")
 
     def stop_sniffer(self):
         """Stop the packet sniffer."""
         if self.is_running:
+            logger.info("Stopping packet sniffer")
             self.is_running = False
             if self.sniffer_thread and self.sniffer_thread.is_alive():
-                self.sniffer_thread.join(
-                    timeout=1.0
-                )  # Wait up to 1 second for thread to finish
-            self.logger.info("Stopping packet capture")
+                self.sniffer_thread.join(timeout=1.0)
+                logger.info(
+                    f"Packet capture stopped. Total packets captured: {self.packet_count}"
+                )
 
     def get_capture_duration(self) -> float:
         """Get the duration of the capture in seconds."""
@@ -144,24 +155,48 @@ class TrafficLogger:
 
     def get_capture_stats(self) -> Dict[str, Any]:
         """Get capture statistics."""
+        duration = self.get_capture_duration()
+        count = self.get_capture_count()
+        pps = count / duration if duration > 0 else 0
+
+        logger.debug(
+            f"Capture stats - Duration: {duration:.1f}s, "
+            f"Packets: {count}, PPS: {pps:.2f}"
+        )
+
         return {
-            "duration": self.get_capture_duration(),
-            "packet_count": self.get_capture_count(),
-            "packets_per_second": self.packet_count / self.get_capture_duration()
-            if self.get_capture_duration() > 0
-            else 0,
+            "duration": duration,
+            "packet_count": count,
+            "packets_per_second": pps,
         }
 
 
 if __name__ == "__main__":
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler("network_monitor.log"),
+            logging.StreamHandler(),
+        ],
+    )
+
+    logger.info("Starting standalone packet capture")
     tf = TrafficLogger()
     try:
         tf.start_sniffer()
-        logging.info("Press Ctrl+C to stop the sniffer.")
+        logger.info("Press Ctrl+C to stop the sniffer")
 
         while True:
             time.sleep(1)
+            stats = tf.get_capture_stats()
     except KeyboardInterrupt:
-        logging.info("Stopping sniffer...")
+        logger.info("Received keyboard interrupt")
         tf.stop_sniffer()
-        logging.info(f"Total packets captured: {tf.get_capture_count()}")
+        final_stats = tf.get_capture_stats()
+        logger.info(
+            f"Final capture stats - Duration: {final_stats['duration']:.1f}s, "
+            f"Total packets: {final_stats['packet_count']}, "
+            f"Avg PPS: {final_stats['packets_per_second']:.2f}"
+        )
