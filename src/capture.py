@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from scapy.all import ICMP, IP, TCP, UDP, Padding, Raw, sniff
+from scapy.all import ICMP, IP, TCP, UDP, Padding, Raw, sniff # pyright: ignore
 
 from database import DatabaseManager
 
@@ -20,10 +20,9 @@ class TrafficLogger:
         self.is_running = False
         self.sniffer_thread: Optional[threading.Thread] = None
         logger.info("Initializing TrafficLogger")
-        # Register cleanup on program exit
         atexit.register(self.stop_sniffer)
 
-    def _extract_packet_info(self, packet) -> Dict[str, Any]:
+    def _extract_packet_info(self, packet) -> Optional[Dict[str, Any]]:
         """Extract relevant information from a packet."""
         try:
             protocol = "Unknown"
@@ -90,16 +89,7 @@ class TrafficLogger:
             packet_info = self._extract_packet_info(packet)
             if packet_info:
                 self.packet_count += 1
-                if self.db.insert_traffic(packet_info):
-                    if (
-                        self.packet_count % 100 == 0
-                    ):  # Log every 100th packet to avoid excessive logging
-                        logger.info(
-                            f"Processed {self.packet_count} packets. Latest: "
-                            f"{packet_info['protocol']} {packet_info['src_ip']}:{packet_info.get('src_port', 'N/A')} -> "
-                            f"{packet_info['dst_ip']}:{packet_info.get('dst_port', 'N/A')}"
-                        )
-                else:
+                if not self.db.insert_traffic(packet_info):
                     logger.error("Failed to insert packet data into database")
         except Exception as e:
             logger.error(f"Error in packet callback: {e}", exc_info=True)

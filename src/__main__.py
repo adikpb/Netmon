@@ -13,7 +13,6 @@ from capture import TrafficLogger
 from database import DatabaseManager
 from utils import lighten_hex_color_for_light_mode, string_to_hex_color
 
-# Configure logging first, before any other operations
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -24,7 +23,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load environment variables
 logger.info("Loading environment variables")
 load_dotenv()
 ABUSEIPDB_API_KEY = os.getenv("ABUSEIPDB_API_KEY")
@@ -33,16 +31,14 @@ if not ABUSEIPDB_API_KEY:
 else:
     logger.info("AbuseIPDB API key loaded successfully")
 
-# Initialize application
 logger.info("Initializing Dash application")
 app = dash.Dash(
     __name__,
-    assets_folder="assets",  # Explicitly set assets folder
-    serve_locally=True,  # Ensure assets are served locally
+    assets_folder="assets",
+    serve_locally=True,
 )
 app.title = "Network Traffic Analysis Dashboard"
 
-# Initialize components
 logger.info("Initializing TrafficLogger and DatabaseManager")
 traffic_logger = TrafficLogger()
 db_manager = DatabaseManager(abuseipdb_key=ABUSEIPDB_API_KEY)
@@ -58,7 +54,6 @@ def signal_handler(sig, frame):
 
 signal.signal(signal.SIGINT, signal_handler)
 
-# Define the layout
 app.layout = html.Div(
     className="dashboard-container",
     children=[
@@ -359,7 +354,6 @@ def update_dashboard(n, protocol_filter):
             f"Updating dashboard - Interval: {n}, Protocol Filter: {protocol_filter}"
         )
 
-        # Fetch data
         df = db_manager.fetch_traffic(protocol_filter=protocol_filter)
         stats = db_manager.get_traffic_statistics()
         capture_stats = traffic_logger.get_capture_stats()
@@ -371,13 +365,11 @@ def update_dashboard(n, protocol_filter):
             f"PPS: {capture_stats['packets_per_second']:.2f}"
         )
 
-        # Format statistics
         total_packets = f"Total Packets: {stats.get('total_packets', 0):,}"
         total_bytes = f"Total Bytes: {stats.get('total_bytes', 0):,}"
         unique_ips = f"Unique IPs: {stats.get('unique_ips', 0):,}"
         packets_per_second = f"Packets/sec: {capture_stats['packets_per_second']:.2f}"
 
-        # Create visualizations
         pie_chart = px.pie(
             df,
             names="protocol",
@@ -393,7 +385,6 @@ def update_dashboard(n, protocol_filter):
             color_discrete_sequence=px.colors.qualitative.Set3,
         )
 
-        # Update chart layouts
         for chart in [pie_chart, bar_chart]:
             chart.update_layout(
                 plot_bgcolor="rgba(0,0,0,0)",
@@ -401,10 +392,8 @@ def update_dashboard(n, protocol_filter):
                 font=dict(size=12),
             )
 
-        # Status indicator
         status = f"Capture Duration: {capture_stats['duration']:.1f}s"
 
-        # Get flagged IPs
         flagged_ips = db_manager.get_flagged_ips()
         logger.debug(f"Retrieved {len(flagged_ips)} flagged IPs")
 
@@ -446,20 +435,18 @@ def export_csv(n_clicks):
 )
 def update_traffic_table_styles(n):
     """Update traffic table styles for protocols and flagged IPs."""
+    styles = [
+        {
+            "if": {"row_index": "odd"},
+            "backgroundColor": "#f2f2f2",
+        }
+    ]
     try:
         logger.debug("Updating traffic table styles")
-        styles = [
-            {
-                "if": {"row_index": "odd"},
-                "backgroundColor": "#f2f2f2",
-            }
-        ]
 
-        # Get all unique protocols
         protocol_types = set(db_manager.get_protocol_types())
         logger.debug(f"Found {len(protocol_types)} unique protocols")
 
-        # Add protocol-based styling
         for protocol in protocol_types:
             color = lighten_hex_color_for_light_mode(string_to_hex_color(protocol))
             styles.append(
@@ -469,7 +456,6 @@ def update_traffic_table_styles(n):
                 }
             )
 
-        # Add flagged IP styling
         flagged_ips = db_manager.get_flagged_ips()
         logger.debug(f"Applying styles for {len(flagged_ips)} flagged IPs")
         for ip_data in flagged_ips:
@@ -507,12 +493,10 @@ def update_traffic_table_styles(n):
                     },
                 ]
             )
-
-        return [styles]
     except Exception as e:
         logger.error(f"Error updating table styles: {e}", exc_info=True)
+    finally:
         return [styles]
-
 
 @app.callback(
     [
@@ -562,12 +546,10 @@ def handle_ip_flagging(
                 logger.info(f"Flagging destination IP: {ip}")
                 db_manager.flag_ip(ip)
 
-        # Get updated flagged IPs and add unflag button text
         flagged_ips = db_manager.get_flagged_ips()
         for item in flagged_ips:
             item["action"] = "Unflag"
 
-        # Create tooltips for abuse reports
         tooltips = []
         for item in flagged_ips:
             try:
@@ -642,18 +624,15 @@ def update_traffic_table(n):
 )
 def update_dashboard_stats(n):
     try:
-        # Fetch data
         df = db_manager.fetch_traffic()
         stats = db_manager.get_traffic_statistics()
         capture_stats = traffic_logger.get_capture_stats()
 
-        # Format statistics
         total_packets = f"Total Packets: {stats.get('total_packets', 0):,}"
         total_bytes = f"Total Bytes: {stats.get('total_bytes', 0):,}"
         unique_ips = f"Unique IPs: {stats.get('unique_ips', 0):,}"
         packets_per_second = f"Packets/sec: {capture_stats['packets_per_second']:.2f}"
 
-        # Create visualizations
         pie_chart = px.pie(
             df,
             names="protocol",
@@ -669,7 +648,6 @@ def update_dashboard_stats(n):
             color_discrete_sequence=px.colors.qualitative.Set3,
         )
 
-        # Update chart layouts
         for chart in [pie_chart, bar_chart]:
             chart.update_layout(
                 plot_bgcolor="rgba(0,0,0,0)",
@@ -677,7 +655,6 @@ def update_dashboard_stats(n):
                 font=dict(size=12),
             )
 
-        # Status indicator
         status = f"Capture Duration: {capture_stats['duration']:.1f}s"
 
         return (

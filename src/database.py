@@ -24,12 +24,10 @@ class DatabaseManager:
         self._init_db()
 
     def _init_db(self):
-        """Initialize the database with required tables and indexes."""
         logger.info("Initializing database tables and indexes")
         with self.get_connection() as conn:
             cursor = conn.cursor()
             try:
-                # Create traffic table with improved schema
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS traffic (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,7 +45,6 @@ class DatabaseManager:
                 """)
                 logger.debug("Traffic table created or verified")
 
-                # Create flagged IPs table
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS flagged_ips (
                         ip TEXT PRIMARY KEY,
@@ -58,7 +55,6 @@ class DatabaseManager:
                 """)
                 logger.debug("Flagged IPs table created or verified")
 
-                # Create indexes for better query performance
                 cursor.execute(
                     "CREATE INDEX IF NOT EXISTS idx_protocol ON traffic(protocol)"
                 )
@@ -80,7 +76,6 @@ class DatabaseManager:
 
     @contextmanager
     def get_connection(self):
-        """Context manager for database connections."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         try:
@@ -89,7 +84,6 @@ class DatabaseManager:
             conn.close()
 
     def insert_traffic(self, data: dict) -> bool:
-        """Insert a new traffic record."""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
@@ -128,7 +122,6 @@ class DatabaseManager:
         end_date: Optional[str] = None,
         limit: int = 100,
     ) -> pd.DataFrame:
-        """Fetch traffic data with optional protocol and date range filters."""
         try:
             with self.get_connection() as conn:
                 query = "SELECT * FROM traffic WHERE 1=1"
@@ -161,7 +154,6 @@ class DatabaseManager:
             return pd.DataFrame()
 
     def get_protocol_types(self) -> List[str]:
-        """Get list of unique protocols."""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
@@ -172,7 +164,6 @@ class DatabaseManager:
             return []
 
     def get_traffic_statistics(self) -> dict:
-        """Get traffic statistics."""
         try:
             with self.get_connection() as conn:
                 stats = {
@@ -206,7 +197,6 @@ class DatabaseManager:
             return {}
 
     def check_ip_abuse(self, ip: str) -> Dict:
-        """Check if an IP is reported as abusive using AbuseIPDB."""
         logger.info(f"Checking abuse information for IP: {ip}")
         if not self.abuseipdb_key:
             logger.warning("AbuseIPDB API key not configured")
@@ -234,7 +224,6 @@ class DatabaseManager:
             return {"score": 0, "reports": str(e)}
 
     def flag_ip(self, ip: str) -> bool:
-        """Flag an IP address and check for abuse reports."""
         logger.info(f"Flagging IP address: {ip}")
         try:
             abuse_info = self.check_ip_abuse(ip)
@@ -262,7 +251,6 @@ class DatabaseManager:
             return False
 
     def unflag_ip(self, ip: str) -> bool:
-        """Remove flag from an IP address."""
         logger.info(f"Unflagging IP address: {ip}")
         try:
             with self.get_connection() as conn:
@@ -276,7 +264,6 @@ class DatabaseManager:
             return False
 
     def get_flagged_ips(self) -> List[Dict[str, str]]:
-        """Get list of all flagged IPs with abuse information."""
         logger.debug("Fetching list of flagged IPs")
         try:
             with self.get_connection() as conn:
@@ -302,7 +289,6 @@ class DatabaseManager:
             return []
 
     def is_ip_flagged(self, ip: str) -> bool:
-        """Check if an IP is flagged."""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
