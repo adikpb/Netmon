@@ -1,11 +1,13 @@
 import logging
-import sqlite3
-from contextlib import contextmanager
 from datetime import datetime
 from typing import Dict, List, Optional
 
 import pandas as pd
 import requests
+from sqlalchemy import func, desc
+from sqlalchemy.orm import Session
+
+from models import Traffic, FlaggedIP, init_db, get_session
 
 logger = logging.getLogger(__name__)
 
@@ -21,92 +23,25 @@ class DatabaseManager:
             logger.warning(
                 "No AbuseIPDB API key provided - abuse checking will be disabled"
             )
-        self._init_db()
-
-    def _init_db(self):
-        logger.info("Initializing database tables and indexes")
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS traffic (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        protocol TEXT,
-                        src_ip TEXT,
-                        dst_ip TEXT,
-                        src_port INTEGER,
-                        dst_port INTEGER,
-                        packet_length INTEGER,
-                        timestamp TEXT,
-                        flags TEXT,
-                        ttl INTEGER,
-                        window_size INTEGER
-                    )
-                """)
-                logger.debug("Traffic table created or verified")
-
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS flagged_ips (
-                        ip TEXT PRIMARY KEY,
-                        timestamp TEXT,
-                        confidence_score INTEGER,
-                        abuse_report TEXT
-                    )
-                """)
-                logger.debug("Flagged IPs table created or verified")
-
-                cursor.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_protocol ON traffic(protocol)"
-                )
-                cursor.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_timestamp ON traffic(timestamp)"
-                )
-                cursor.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_src_ip ON traffic(src_ip)"
-                )
-                cursor.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_dst_ip ON traffic(dst_ip)"
-                )
-                conn.commit()
-                logger.debug("Database indexes created or verified")
-                logger.info("Database initialization completed successfully")
-            except Exception as e:
-                logger.error(f"Error during database initialization: {e}")
-                raise
-
-    @contextmanager
-    def get_connection(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            yield conn
-        finally:
-            conn.close()
+        self.session_factory = init_db(db_path)
 
     def insert_traffic(self, data: dict) -> bool:
         try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT INTO traffic 
-                    (protocol, src_ip, dst_ip, src_port, dst_port, packet_length, timestamp, flags, ttl, window_size)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                    (
-                        data.get("protocol"),
-                        data.get("src_ip"),
-                        data.get("dst_ip"),
-                        data.get("src_port"),
-                        data.get("dst_port"),
-                        data.get("packet_length"),
-                        data.get("timestamp"),
-                        data.get("flags"),
-                        data.get("ttl"),
-                        data.get("window_size"),
-                    ),
+            with get_session(self.session_factory) as session:
+                traffic = Traffic(
+                    protocol=data.get("protocol"),
+                    src_ip=data.get("src_ip"),
+                    dst_ip=data.get("dst_ip"),
+                    src_port=data.get("src_port"),
+                    dst_port=data.get("dst_port"),
+                    packet_length=data.get("packet_length"),
+                    timestamp=datetime.fromisoformat(data.get("timestamp")),
+                    flags=data.get("flags"),
+                    ttl=data.get("ttl"),
+                    window_size=data.get("window_size"),
                 )
-                conn.commit()
+                session.add(traffic)
+                session.commit()
                 logger.debug(
                     f"Inserted traffic record for {data.get('src_ip')} -> {data.get('dst_ip')}"
                 )
@@ -123,30 +58,25 @@ class DatabaseManager:
         limit: int = 100,
     ) -> pd.DataFrame:
         try:
-            with self.get_connection() as conn:
-                query = "SELECT * FROM traffic WHERE 1=1"
-                params = []
+            with get_session(self.session_factory) as session:
+                query = session.query(Traffic)
 
                 if protocol_filter and protocol_filter != "All":
-                    query += " AND protocol = ?"
-                    params.append(protocol_filter)
+                    query = query.filter(Traffic.protocol == protocol_filter)
                     logger.debug(f"Applying protocol filter: {protocol_filter}")
 
                 if start_date:
-                    query += " AND timestamp >= ?"
-                    params.append(start_date)
+                    query = query.filter(Traffic.timestamp >= datetime.fromisoformat(start_date))
                     logger.debug(f"Applying start date filter: {start_date}")
 
                 if end_date:
-                    query += " AND timestamp <= ?"
-                    params.append(end_date)
+                    query = query.filter(Traffic.timestamp <= datetime.fromisoformat(end_date))
                     logger.debug(f"Applying end date filter: {end_date}")
 
-                query += " ORDER BY timestamp DESC LIMIT ?"
-                params.append(limit)
+                query = query.order_by(desc(Traffic.timestamp)).limit(limit)
+                logger.debug(f"Executing query with limit: {limit}")
 
-                logger.debug(f"Executing query: {query} with params: {params}")
-                df = pd.read_sql(query, conn, params=params)
+                df = pd.read_sql(query.statement, session.bind)
                 logger.debug(f"Retrieved {len(df)} traffic records")
                 return df
         except Exception as e:
@@ -155,41 +85,32 @@ class DatabaseManager:
 
     def get_protocol_types(self) -> List[str]:
         try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT DISTINCT protocol FROM traffic")
-                return [row[0] for row in cursor.fetchall()]
+            with get_session(self.session_factory) as session:
+                protocols = session.query(Traffic.protocol).distinct().all()
+                return [p[0] for p in protocols]
         except Exception as e:
             logging.error(f"Error fetching protocol types: {e}")
             return []
 
     def get_traffic_statistics(self) -> dict:
         try:
-            with self.get_connection() as conn:
+            with get_session(self.session_factory) as session:
                 stats = {
-                    "total_packets": pd.read_sql(
-                        "SELECT COUNT(*) as count FROM traffic", conn
-                    ).iloc[0, 0],
-                    "total_bytes": pd.read_sql(
-                        "SELECT SUM(packet_length) as total FROM traffic", conn
-                    ).iloc[0, 0],
-                    "unique_ips": pd.read_sql(
-                        """
-                        SELECT COUNT(DISTINCT src_ip) + COUNT(DISTINCT dst_ip) as count 
-                        FROM traffic
-                    """,
-                        conn,
-                    ).iloc[0, 0],
-                    "top_talkers": pd.read_sql(
-                        """
-                        SELECT src_ip, COUNT(*) as count 
-                        FROM traffic 
-                        GROUP BY src_ip 
-                        ORDER BY count DESC 
-                        LIMIT 5
-                    """,
-                        conn,
-                    ).to_dict("records"),
+                    "total_packets": session.query(func.count(Traffic.id)).scalar(),
+                    "total_bytes": session.query(func.sum(Traffic.packet_length)).scalar() or 0,
+                    "unique_ips": session.query(
+                        func.count(func.distinct(Traffic.src_ip)) + 
+                        func.count(func.distinct(Traffic.dst_ip))
+                    ).scalar(),
+                    "top_talkers": [
+                        {"src_ip": row[0], "count": row[1]}
+                        for row in session.query(
+                            Traffic.src_ip,
+                            func.count(Traffic.id)
+                        ).group_by(Traffic.src_ip).order_by(
+                            desc(func.count(Traffic.id))
+                        ).limit(5).all()
+                    ]
                 }
                 return stats
         except Exception as e:
@@ -227,21 +148,15 @@ class DatabaseManager:
         logger.info(f"Flagging IP address: {ip}")
         try:
             abuse_info = self.check_ip_abuse(ip)
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT OR REPLACE INTO flagged_ips (ip, timestamp, confidence_score, abuse_report)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (
-                        ip,
-                        datetime.now().isoformat(),
-                        abuse_info["score"],
-                        str(abuse_info["reports"]),
-                    ),
+            with get_session(self.session_factory) as session:
+                flagged_ip = FlaggedIP(
+                    ip=ip,
+                    timestamp=datetime.now(),
+                    confidence_score=abuse_info["score"],
+                    abuse_report=str(abuse_info["reports"]),
                 )
-                conn.commit()
+                session.merge(flagged_ip)
+                session.commit()
                 logger.info(
                     f"Successfully flagged IP {ip} with abuse score {abuse_info['score']}"
                 )
@@ -253,10 +168,9 @@ class DatabaseManager:
     def unflag_ip(self, ip: str) -> bool:
         logger.info(f"Unflagging IP address: {ip}")
         try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM flagged_ips WHERE ip = ?", (ip,))
-                conn.commit()
+            with get_session(self.session_factory) as session:
+                session.query(FlaggedIP).filter(FlaggedIP.ip == ip).delete()
+                session.commit()
                 logger.info(f"Successfully unflagged IP: {ip}")
                 return True
         except Exception as e:
@@ -266,21 +180,17 @@ class DatabaseManager:
     def get_flagged_ips(self) -> List[Dict[str, str]]:
         logger.debug("Fetching list of flagged IPs")
         try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT ip, timestamp, confidence_score, abuse_report 
-                    FROM flagged_ips
-                """)
+            with get_session(self.session_factory) as session:
+                flagged_ips = session.query(FlaggedIP).all()
                 results = [
                     {
-                        "ip": row[0],
-                        "timestamp": row[1],
+                        "ip": ip.ip,
+                        "timestamp": ip.timestamp.isoformat(),
                         "action": "Unflag",
-                        "confidence_score": row[2],
-                        "abuse_report": row[3],
+                        "confidence_score": ip.confidence_score,
+                        "abuse_report": ip.abuse_report,
                     }
-                    for row in cursor.fetchall()
+                    for ip in flagged_ips
                 ]
                 logger.debug(f"Retrieved {len(results)} flagged IPs")
                 return results
@@ -290,10 +200,8 @@ class DatabaseManager:
 
     def is_ip_flagged(self, ip: str) -> bool:
         try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT 1 FROM flagged_ips WHERE ip = ?", (ip,))
-                result = cursor.fetchone() is not None
+            with get_session(self.session_factory) as session:
+                result = session.query(FlaggedIP).filter(FlaggedIP.ip == ip).first() is not None
                 logger.debug(
                     f"Checked flag status for IP {ip}: {'flagged' if result else 'not flagged'}"
                 )

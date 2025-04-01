@@ -250,7 +250,7 @@ def update_traffic_table_styles(n):
         Input("flagged-ips-table", "active_cell"),
     ],
     [State("traffic-table", "data"), State("flagged-ips-table", "data")],
-    prevent_initial_call=True,
+    prevent_initial_call="initial_duplicate",
 )
 def handle_ip_flagging(
     active_cell,
@@ -336,78 +336,6 @@ def handle_ip_flagging(
         return [flagged_ips, tooltips]
     except Exception as e:
         logger.error(f"Error in IP flagging callback: {e}", exc_info=True)
-        raise PreventUpdate
-
-
-@app.callback(
-    Output("traffic-table", "data", allow_duplicate=True),
-    Input("interval-component", "n_intervals"),
-    prevent_initial_call=True,
-)
-def update_traffic_table(n):
-    df = db_manager.fetch_traffic()
-    return df.to_dict("records")
-
-
-@app.callback(
-    [
-        Output("traffic-pie-chart", "figure", allow_duplicate=True),
-        Output("traffic-bar-chart", "figure", allow_duplicate=True),
-        Output("total-packets", "children", allow_duplicate=True),
-        Output("total-bytes", "children", allow_duplicate=True),
-        Output("unique-ips", "children", allow_duplicate=True),
-        Output("packets-per-second", "children", allow_duplicate=True),
-        Output("status-indicator", "children", allow_duplicate=True),
-    ],
-    [Input("interval-component", "n_intervals")],
-    prevent_initial_call=True,
-)
-def update_dashboard_stats(n):
-    try:
-        df = db_manager.fetch_traffic()
-        stats = db_manager.get_traffic_statistics()
-        capture_stats = traffic_logger.get_capture_stats()
-
-        total_packets = f"Total Packets: {stats.get('total_packets', 0):,}"
-        total_bytes = f"Total Bytes: {stats.get('total_bytes', 0):,}"
-        unique_ips = f"Unique IPs: {stats.get('unique_ips', 0):,}"
-        packets_per_second = f"Packets/sec: {capture_stats['packets_per_second']:.2f}"
-
-        pie_chart = px.pie(
-            df,
-            names="protocol",
-            title="Protocol Distribution",
-            color_discrete_sequence=px.colors.qualitative.Set3,
-        )
-        bar_chart = px.bar(
-            df,
-            x="protocol",
-            y="packet_length",
-            title="Packet Length by Protocol",
-            color="protocol",
-            color_discrete_sequence=px.colors.qualitative.Set3,
-        )
-
-        for chart in [pie_chart, bar_chart]:
-            chart.update_layout(
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-                font=dict(size=12),
-            )
-
-        status = f"Capture Duration: {capture_stats['duration']:.1f}s"
-
-        return (
-            pie_chart,
-            bar_chart,
-            total_packets,
-            total_bytes,
-            unique_ips,
-            packets_per_second,
-            status,
-        )
-    except Exception as e:
-        logger.error(f"Error updating dashboard: {e}")
         raise PreventUpdate
 
 
