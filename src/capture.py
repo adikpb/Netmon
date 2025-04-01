@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from scapy.all import ICMP, IP, TCP, UDP, Padding, Raw, sniff # pyright: ignore
+from scapy.all import ICMP, IP, TCP, UDP, Padding, Raw, sniff  # pyright: ignore
 
 from database import DatabaseManager
 
@@ -23,7 +23,6 @@ class TrafficLogger:
         atexit.register(self.stop_sniffer)
 
     def _extract_packet_info(self, packet) -> Optional[Dict[str, Any]]:
-        """Extract relevant information from a packet."""
         try:
             protocol = "Unknown"
             for layer in packet.layers()[::-1]:
@@ -81,7 +80,6 @@ class TrafficLogger:
             return None
 
     def _packet_callback(self, packet):
-        """Callback function for packet processing."""
         try:
             if not self.is_running:
                 return
@@ -95,7 +93,6 @@ class TrafficLogger:
             logger.error(f"Error in packet callback: {e}", exc_info=True)
 
     def _sniff_thread(self):
-        """Thread function for packet capture."""
         try:
             self.start_time = time.time()
             self.packet_count = 0
@@ -112,7 +109,6 @@ class TrafficLogger:
             self.stop_sniffer()
 
     def start_sniffer(self):
-        """Start the packet sniffer in a separate thread."""
         if not self.is_running and (
             not self.sniffer_thread or not self.sniffer_thread.is_alive()
         ):
@@ -123,7 +119,6 @@ class TrafficLogger:
             logger.info("Packet capture thread started successfully")
 
     def stop_sniffer(self):
-        """Stop the packet sniffer."""
         if self.is_running:
             logger.info("Stopping packet sniffer")
             self.is_running = False
@@ -134,17 +129,14 @@ class TrafficLogger:
                 )
 
     def get_capture_duration(self) -> float:
-        """Get the duration of the capture in seconds."""
         if self.start_time is None:
             return 0.0
         return time.time() - self.start_time
 
     def get_capture_count(self) -> int:
-        """Get the total number of packets captured."""
         return self.packet_count
 
     def get_capture_stats(self) -> Dict[str, Any]:
-        """Get capture statistics."""
         duration = self.get_capture_duration()
         count = self.get_capture_count()
         pps = count / duration if duration > 0 else 0
