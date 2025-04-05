@@ -1,93 +1,60 @@
-# 🚀 NetMon - Network Traffic Analysis Dashboard
+# 📡 Network Traffic Analysis Dashboard
 
-This project is a **real-time network traffic analysis dashboard** built using **Dash, Scapy, SQLite, and Plotly**. It captures and visualizes network packets, showing useful insights such as protocol distribution and packet lengths.
+This is a simple and interactive Network Traffic Analysis Dashboard built using **Python**, **Scapy**, **Dash**, and **SQLite**. It helps students and beginners capture, log, and visualize network packets in real time.
 
 ---
 
-## 📌 Features
-- **Real-time Packet Capturing** using Scapy
-- **SQLite Database Logging** for network packets
-- **Interactive Dashboard** with:
-  - Live **Data Table** of captured packets
-  - **Pie Chart** for protocol distribution
-  - **Bar Chart** for packet size per protocol
-- **CSV Export** for saving captured network logs
+## 📋 Table of Contents
+
+- [About the Project](#about-the-project)
+- [Features](#features)
+- [Installation](#installation)
+- [How to Run](#how-to-run)
+- [Screenshots](#screenshots)
+- [Project Structure](#project-structure)
+- [References](#references)
+
+---
+
+## 📖 About the Project
+
+This tool is mainly created for educational purposes. It captures live packets from your network interface using **Scapy**, stores them in an **SQLite** database, and then displays useful information through a user-friendly **Dash** web interface. You can also filter traffic, flag suspicious IPs, and download packet logs as CSV files.
+
+---
+
+## ✨ Features
+
+- 📡 Real-time packet sniffing
+- 🗂️ Packet logging to SQLite database
+- 📊 Live dashboard using Dash and Plotly
+- 🔎 Filter by protocol (TCP, UDP, ICMP, etc.)
+- 🚩 Flag suspicious IPs with risk scoring
+- 📈 Graphs for protocol distribution and packet sizes
+- 📁 Export logs to CSV
 
 ---
 
 ## 🛠️ Installation
 
-### 1️⃣ **Clone the Repository**
+> Tested on Python 3.12+
+
+Clone the repo and install the required packages:
+
 ```bash
-git clone https://github.com/adikpb/NetMon.git
-cd NetMon
+git clone https://github.com/yourusername/network-traffic-dashboard.git
+cd network-traffic-dashboard
+pip install scapy dash pandas sqlalchemy plotly
 ```
 
-### 2️⃣ **Install Dependencies**
-Make sure you have Python installed (>=3.8). Then run:
+Obtain an api key from https://www.abuseipdb.com/
+Create a .env file with the following key=value pair
+```
+ABUSEIPDB_API_KEY=REPLACEWITHYOURKEY
+```
+
+Run with: 
 ```bash
-pip install dash scapy pandas plotly sqlite3
+python src
 ```
 
----
-
-## ▶️ Running the Dashboard
-Run the script:
-```bash
-python main.py
-```
-
-After running, open your browser and go to:
-```
-http://127.0.0.1:8050/
-```
-
----
-
-## 📊 How It Works
-1. **Captures Network Traffic** using Scapy
-2. **Stores Data** in `network_traffic.db` (SQLite)
-3. **Displays Data** in a Dash-based web interface
-4. **Updates Every 5 Seconds** with latest traffic logs
-5. **Exports Logs as CSV** for analysis
-
----
-
-## 🛑 Stopping the Script
-Press **Ctrl + C** in the terminal.
-
----
-
-## ⚠️ Troubleshooting
-1. **Permission Denied (Linux/macOS)?** Run with `sudo`:
-   ```bash
-   sudo python main.py
-   ```
-2. **Port Already in Use?** Change the port in `app.run_server()`:
-   ```python
-   app.run_server(debug=True, port=8080)
-   ```
-3. **Missing Dependencies?** Install them using `pip`.
-
----
-
-## 📜 License
-This project is licensed under the **MIT License**.
-
----
-
-## 🤝 Contributing
-Pull requests are welcome! Feel free to improve performance, add features, or enhance UI.
-
----
-
-## 🌟 Acknowledgments
-- **Dash** for interactive web applications
-- **Scapy** for network packet analysis
-- **Plotly** for data visualization
-
----
-
-### 📧 Contact
-For any queries, reach out via GitHub issues.
-
+The Dashboard will be present at http://127.0.0.1:8050
